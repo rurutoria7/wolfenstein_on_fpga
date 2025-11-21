@@ -10,11 +10,6 @@ module RaycasterModule (
     input wire [15:0] iny,         // Player Y position (16-bit world coords)
     input wire [9:0] ina,          // Player angle (0-1023, maps to 0-2π)
 
-    // Map interface
-    output reg [9:0] map_x,        // Map query X
-    output reg [9:0] map_y,        // Map query Y
-    input wire map_hit,            // Map returns hit (1 = wall)
-
     // Pixel output
     output reg [7:0] px_x,         // Pixel X coordinate (0-159)
     output reg [6:0] px_y,         // Pixel Y coordinate (0-119)
@@ -111,6 +106,30 @@ module RaycasterModule (
         .hskip(pc_hskip)
     );
 
+    // VerticalDDA module outputs
+    wire ver_dda_done, ver_dda_hit;
+    wire [31:0] ver_dda_dis;
+
+    // Instantiate VerticalDDA module
+    VerticalDDA #(
+        .TILE_WIDTH(CELL_SIZE),
+        .MAX_DEPTH(MAX_DEPTH)
+    ) ver_dda_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(state == PRECALC && precalc_done),
+        .vrx(pc_vrx),
+        .vry(pc_vry),
+        .vxo(pc_vxo),
+        .vyo(pc_vyo),
+        .vskip(pc_vskip),
+        .px(x),
+        .py(y),
+        .dis(ver_dda_dis),
+        .done(ver_dda_done),
+        .hit(ver_dda_hit)
+    );
+
     //=======================================================================
     // State Register
     //=======================================================================
@@ -138,13 +157,9 @@ module RaycasterModule (
             end
 
             VER_DDA: begin
-                next_state = VER_DDA; // Placeholder for DDA stepping logic
+                if (ver_dda_done)
+                    next_state = HOR_DDA;
             end
-
-            // VER_DDA: begin
-            //     if (map_hit || ver_depth >= MAX_DEPTH || ver_skip)
-            //         next_state = HOR_DDA;
-            // end
 
             // HOR_DDA: begin
             //     if (map_hit || hor_depth >= MAX_DEPTH || hor_skip)
@@ -482,5 +497,137 @@ module Precalc #(
     // hxo = cot * hyo (signed multiplication)
     wire signed [31:0] hxo_full = cot_val * hyo;
     assign hxo = hxo_full >>> FRAC_BITS;
+
+endmodule
+
+
+//=============================================================================
+// VerticalDDA Module - Performs vertical grid line DDA ray casting
+//=============================================================================
+module VerticalDDA #(
+    parameter TILE_WIDTH = 64,
+    parameter MAX_DEPTH = 8
+) (
+    input wire clk,
+    input wire rst_n,
+    input wire start,                      // Start DDA iteration
+
+    // Initial ray parameters from Precalc
+    input wire signed [15:0] vrx,          // Initial ray X
+    input wire signed [15:0] vry,          // Initial ray Y
+    input wire signed [15:0] vxo,          // X step per iteration
+    input wire signed [15:0] vyo,          // Y step per iteration
+    input wire vskip,                      // Skip flag (looking straight up/down)
+
+    // Player position for distance calculation
+    input wire [15:0] px,
+    input wire [15:0] py,
+
+    // Outputs
+    output reg [31:0] dis,                 // Distance squared to hit point
+    output reg done,                       // DDA complete flag
+    output reg hit                         // Wall hit flag
+);
+
+    // DDA FSM states
+    localparam DDA_IDLE  = 2'd0;
+    localparam DDA_CHECK = 2'd1;
+    localparam DDA_STEP  = 2'd2;
+    localparam DDA_DONE  = 2'd3;
+
+    reg [1:0] dda_state;
+
+    // Internal ray position
+    reg signed [15:0] rx, ry;
+    reg [3:0] depth;
+
+    // Latched skip flag
+    reg skip_latched;
+
+    // Internal map ROM instance
+    wire [7:0] map_addr;
+    wire [1:0] map_data;
+
+    map_rom map_inst (
+        .addr(map_addr),
+        .data(map_data)
+    );
+
+    // Map address: convert world coords to tile index (16x16 map)
+    // rx/ry are in world coords, divide by TILE_WIDTH (64) to get tile index
+    // addr = {y_tile[3:0], x_tile[3:0]}
+    assign map_addr = {ry[9:6], rx[9:6]};
+
+    // DDA State Machine
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dda_state <= DDA_IDLE;
+            rx <= 0;
+            ry <= 0;
+            depth <= 0;
+            dis <= 0;
+            done <= 0;
+            hit <= 0;
+            skip_latched <= 0;
+        end else begin
+            case (dda_state)
+                DDA_IDLE: begin
+                    done <= 0;
+                    if (start) begin
+                        rx <= vrx;
+                        ry <= vry;
+                        depth <= 0;
+                        skip_latched <= vskip;
+                        if (vskip) begin
+                            // Skip vertical DDA, go directly to done
+                            dda_state <= DDA_DONE;
+                        end else begin
+                            dda_state <= DDA_CHECK;
+                        end
+                    end
+                end
+
+                DDA_CHECK: begin
+                    // Check if current position hits a wall or exceeds depth
+                    // map_data != 0 means wall hit
+                    if (map_data != 2'b00) begin
+                        hit <= 1;
+                        dda_state <= DDA_DONE;
+                    end else if (depth >= MAX_DEPTH) begin
+                        hit <= 0;
+                        dda_state <= DDA_DONE;
+                    end else begin
+                        dda_state <= DDA_STEP;
+                    end
+                end
+
+                DDA_STEP: begin
+                    // Step to next grid line
+                    rx <= rx + vxo;
+                    ry <= ry + vyo;
+                    depth <= depth + 1;
+                    dda_state <= DDA_CHECK;
+                end
+
+                DDA_DONE: begin
+                    // Calculate distance squared: (rx - px)^2 + (ry - py)^2
+                    if (skip_latched) begin
+                        // No hit possible, set max distance
+                        dis <= 32'hFFFFFFFF;
+                        hit <= 0;
+                    end else begin
+                        dis <= ($signed(rx) - $signed({1'b0, px[14:0]})) *
+                               ($signed(rx) - $signed({1'b0, px[14:0]})) +
+                               ($signed(ry) - $signed({1'b0, py[14:0]})) *
+                               ($signed(ry) - $signed({1'b0, py[14:0]}));
+                    end
+                    done <= 1;
+                    dda_state <= DDA_IDLE;
+                end
+
+                default: dda_state <= DDA_IDLE;
+            endcase
+        end
+    end
 
 endmodule
