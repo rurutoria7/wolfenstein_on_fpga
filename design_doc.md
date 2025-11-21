@@ -43,23 +43,13 @@
     - ClockPerFrame: 1e8/60 = 1.66e6 clk
     - ColumnPerFrame = ClockPerFrame/Width = 10375 clk
 
-## Convention
+## Data Type
 
-- 命名規範:
-    - wire: snake_case
-        - 如果該 signal 合成出來會是 wire, 使用 snake_case
-    - FlipFlop: CamelCase
-        - 如果該 signal 合成出來會是 FlipFlop, 使用 CamelCase
-    - Module 接口
-        ```
-        in wire[9:0]  in_player_x
-        in wire[11:0] out_pixel_color
-        ```
-- Control Signal
-    ```
-    start: 0 0 0 0 1 0 0 0
-    end:   0 0 0 0 0 0 0 0
-    ```
+- World Position: 16 bit unsigned integer
+- Angle: 10 bit unsigned integer
+- Sin/Cos/Tan/Cot : Q9.7 signed fixed-point
+    - according to Cot/Tan scope, under 10 bit Angle
+- Pixel Coord : 10 bit unsigned integer
 
 ## Modules
 
@@ -85,13 +75,20 @@
              hrx, hry, hxo, hyo, hskip
 
         tan = ...
+        div_tan = ... // cot
 
+        // look exactly up or down
+        vskip = (ra == 90 || ra == 270)? 1 : 0
         vrx = (ra < 90 || ra > 270)? ceil_to_tile(px) : floor_to_tile(px)
         vry = py + tan * (vrx - px) // dy = tan * dx
         vox = TILE_WIDTH
         voy = TILE_WIDTH * tan
 
-        hrx = 
+        hskip = (ra == 0 || ra == 180)? 1 : 0
+        hry = (ra > 0 && ra < 180)?  ceil_to_tile(py) : floor_to_tile(px)
+        hrx = px + (hry - py) * div_tan;
+        hoy = TILE_WIDTH;
+        hox = TILE_WIDTH * div_tan;
         ```
     - ![alt text](image.png)
     - FSM
