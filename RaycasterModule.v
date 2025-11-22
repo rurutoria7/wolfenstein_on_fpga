@@ -110,24 +110,48 @@ module RaycasterModule (
     wire ver_dda_done, ver_dda_hit;
     wire [31:0] ver_dda_dis;
 
-    // Instantiate VerticalDDA module
-    VerticalDDA #(
+    // HorizontalDDA module outputs
+    wire hor_dda_done, hor_dda_hit;
+    wire [31:0] hor_dda_dis;
+
+    // Instantiate RayDDA for vertical grid lines
+    RayDDA #(
         .TILE_WIDTH(CELL_SIZE),
         .MAX_DEPTH(MAX_DEPTH)
     ) ver_dda_inst (
         .clk(clk),
         .rst_n(rst_n),
         .start(state == PRECALC && precalc_done),
-        .vrx(pc_vrx),
-        .vry(pc_vry),
-        .vxo(pc_vxo),
-        .vyo(pc_vyo),
-        .vskip(pc_vskip),
+        .init_rx(pc_vrx),
+        .init_ry(pc_vry),
+        .step_x(pc_vxo),
+        .step_y(pc_vyo),
+        .skip(pc_vskip),
         .px(x),
         .py(y),
         .dis(ver_dda_dis),
         .done(ver_dda_done),
         .hit(ver_dda_hit)
+    );
+
+    // Instantiate RayDDA for horizontal grid lines
+    RayDDA #(
+        .TILE_WIDTH(CELL_SIZE),
+        .MAX_DEPTH(MAX_DEPTH)
+    ) hor_dda_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(state == VER_DDA && ver_dda_done),
+        .init_rx(pc_hrx),
+        .init_ry(pc_hry),
+        .step_x(pc_hxo),
+        .step_y(pc_hyo),
+        .skip(pc_hskip),
+        .px(x),
+        .py(y),
+        .dis(hor_dda_dis),
+        .done(hor_dda_done),
+        .hit(hor_dda_hit)
     );
 
     //=======================================================================
@@ -161,10 +185,10 @@ module RaycasterModule (
                     next_state = HOR_DDA;
             end
 
-            // HOR_DDA: begin
-            //     if (map_hit || hor_depth >= MAX_DEPTH || hor_skip)
-            //         next_state = CALC_HEIGHT;
-            // end
+            HOR_DDA: begin
+                if (hor_dda_done)
+                    next_state = CALC_HEIGHT;
+            end
 
             // CALC_HEIGHT: begin
             //     next_state = DRAW_COL;
@@ -255,67 +279,6 @@ module RaycasterModule (
             end
         end
     end
-
-    // // VER_DDA state: Vertical line DDA
-    // always @(posedge clk or negedge rst_n) begin
-    //     if (!rst_n) begin
-    //         vdis <= 0;
-    //     end else begin
-    //         if (state == VER_DDA && !ver_skip) begin
-    //             if (!map_hit && ver_depth < MAX_DEPTH) begin
-    //                 // Step ray
-    //                 ver_rx <= ver_rx + ver_xo;
-    //                 ver_ry <= ver_ry + ver_yo;
-    //                 ver_depth <= ver_depth + 1;
-
-    //                 // Query map
-    //                 map_x <= ver_rx[15:6];  // Divide by 64 to get cell coordinate
-    //                 map_y <= ver_ry[15:6];
-    //             end else begin
-    //                 // Calculate distance squared
-    //                 // vdis = (ver_rx - x)^2 + (ver_ry - y)^2
-    //                 vdis <= (ver_rx - $signed({1'b0, x[14:0]})) * (ver_rx - $signed({1'b0, x[14:0]})) +
-    //                         (ver_ry - $signed({1'b0, y[14:0]})) * (ver_ry - $signed({1'b0, y[14:0]}));
-    //             end
-    //         end
-    //     end
-    // end
-
-    // // HOR_DDA state: Horizontal line DDA
-    // always @(posedge clk or negedge rst_n) begin
-    //     if (!rst_n) begin
-    //         hdis <= 0;
-    //         is_horizontal_wall <= 0;
-    //     end else begin
-    //         if (state == HOR_DDA && !hor_skip) begin
-    //             if (!map_hit && hor_depth < MAX_DEPTH) begin
-    //                 // Step ray
-    //                 hor_rx <= hor_rx + hor_xo;
-    //                 hor_ry <= hor_ry + hor_yo;
-    //                 hor_depth <= hor_depth + 1;
-
-    //                 // Query map
-    //                 map_x <= hor_rx[15:6];  // Divide by 64 to get cell coordinate
-    //                 map_y <= hor_ry[15:6];
-    //             end else begin
-    //                 // Calculate distance squared
-    //                 hdis <= (hor_rx - $signed({1'b0, x[14:0]})) * (hor_rx - $signed({1'b0, x[14:0]})) +
-    //                         (hor_ry - $signed({1'b0, y[14:0]})) * (hor_ry - $signed({1'b0, y[14:0]}));
-    //             end
-    //         end
-
-    //         if (state == CALC_HEIGHT) begin
-    //             // Choose minimum distance
-    //             if (vdis < hdis || hor_skip) begin
-    //                 final_dis <= vdis;
-    //                 is_horizontal_wall <= 0;
-    //             end else begin
-    //                 final_dis <= hdis;
-    //                 is_horizontal_wall <= 1;
-    //             end
-    //         end
-    //     end
-    // end
 
     // // CALC_HEIGHT state: Calculate wall height
     // always @(posedge clk or negedge rst_n) begin
@@ -506,9 +469,9 @@ endmodule
 
 
 //=============================================================================
-// VerticalDDA Module - Performs vertical grid line DDA ray casting
+// RayDDA Module - Performs DDA ray casting (used for both vertical and horizontal)
 //=============================================================================
-module VerticalDDA #(
+module RayDDA #(
     parameter TILE_WIDTH = 64,
     parameter MAX_DEPTH = 8
 ) (
@@ -517,11 +480,11 @@ module VerticalDDA #(
     input wire start,                      // Start DDA iteration
 
     // Initial ray parameters from Precalc
-    input wire signed [15:0] vrx,          // Initial ray X
-    input wire signed [15:0] vry,          // Initial ray Y
-    input wire signed [15:0] vxo,          // X step per iteration
-    input wire signed [15:0] vyo,          // Y step per iteration
-    input wire vskip,                      // Skip flag (looking straight up/down)
+    input wire signed [15:0] init_rx,      // Initial ray X
+    input wire signed [15:0] init_ry,      // Initial ray Y
+    input wire signed [15:0] step_x,       // X step per iteration
+    input wire signed [15:0] step_y,       // Y step per iteration
+    input wire skip,                       // Skip flag
 
     // Player position for distance calculation
     input wire [15:0] px,
@@ -581,12 +544,12 @@ module VerticalDDA #(
                 DDA_IDLE: begin
                     done <= 0;
                     if (start) begin
-                        rx <= vrx;
-                        ry <= vry;
+                        rx <= init_rx;
+                        ry <= init_ry;
                         depth <= 0;
-                        skip_latched <= vskip;
-                        if (vskip) begin
-                            // Skip vertical DDA, go directly to done
+                        skip_latched <= skip;
+                        if (skip) begin
+                            // Skip DDA, go directly to done
                             dda_state <= DDA_DONE;
                         end else begin
                             dda_state <= DDA_CHECK;
@@ -610,8 +573,8 @@ module VerticalDDA #(
 
                 DDA_STEP: begin
                     // Step to next grid line
-                    rx <= rx + vxo;
-                    ry <= ry + vyo;
+                    rx <= rx + step_x;
+                    ry <= ry + step_y;
                     depth <= depth + 1;
                     dda_state <= DDA_CHECK;
                 end

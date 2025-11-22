@@ -39,11 +39,11 @@ unisims
 *.lib
 
 ## dirs
-vivado.cache/
-vivado.hw/
-vivado.ip_user_files/
-vivado.runs/
-vivado.sim/
+vivado_proj_dir.cache/
+vivado_proj_dir.hw/
+vivado_proj_dir.ip_user_files/
+vivado_proj_dir.runs/
+vivado_proj_dir.sim/
 
 ###### for Xilinx Vivado|ISE
 .Xil/
@@ -65,3 +65,6 @@ xvlog.*
 
 ## checkpoint files
 *.dcp
+
+
+vivado_proj_dir/vivado_proj_dir.ip_user_files

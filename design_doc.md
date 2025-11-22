@@ -75,7 +75,9 @@
         hoy = TILE_WIDTH;
         hox = TILE_WIDTH * div_tan;
         ```
-    - ![alt text](image.png)
+
+        <img src="image.png" alt="DDA Illustration" style="zoom:40%;" />
+
     - FSM
         ```mermaid
         stateDiagram-v2
