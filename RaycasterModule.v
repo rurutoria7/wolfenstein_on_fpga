@@ -458,8 +458,10 @@ module Precalc #(
     // Vertical DDA initialization
     // =========================================================================
     // vrx = looking_right ? ceil_to_tile(px) : floor_to_tile(px)
+    // if looking left --> vrx -= 1
     wire [15:0] vrx_unsigned = looking_right ? ceil_tile_x : floor_tile_x;
-    assign vrx = $signed({1'b0, vrx_unsigned[14:0]});
+    assign vrx = looking_left ? ($signed({1'b0, vrx_unsigned[14:0]}) - 1)
+                              : $signed({1'b0, vrx_unsigned[14:0]});
 
     // vry = py + tan * (vrx - px)
     // dx = vrx - px (signed)
@@ -480,8 +482,10 @@ module Precalc #(
     // Horizontal DDA initialization
     // =========================================================================
     // hry = looking_up ? ceil_to_tile(py) : floor_to_tile(py)
+    // if looking down --> hry -= 1
     wire [15:0] hry_unsigned = looking_up ? ceil_tile_y : floor_tile_y;
-    assign hry = $signed({1'b0, hry_unsigned[14:0]});
+    assign hry = looking_down ? ($signed({1'b0, hry_unsigned[14:0]}) - 1)
+                              : $signed({1'b0, hry_unsigned[14:0]});
 
     // hrx = px + cot * (hry - py)
     // dy = hry - py (signed)
@@ -545,7 +549,7 @@ module VerticalDDA #(
     reg skip_latched;
 
     // Internal map ROM instance
-    wire [7:0] map_addr;
+    wire [5:0] map_addr;
     wire [1:0] map_data;
 
     map_rom map_inst (
@@ -553,10 +557,13 @@ module VerticalDDA #(
         .data(map_data)
     );
 
-    // Map address: convert world coords to tile index (16x16 map)
+    // Map address: convert world coords to tile index (8x8 map)
     // rx/ry are in world coords, divide by TILE_WIDTH (64) to get tile index
-    // addr = {y_tile[3:0], x_tile[3:0]}
-    assign map_addr = {ry[9:6], rx[9:6]};
+    // Y axis is flipped: y=0 is bottom, y=7 is top (anti-gravity direction)
+    // addr = {(7 - y_tile), x_tile}
+    wire [2:0] y_tile = ry[8:6];
+    wire [2:0] x_tile = rx[8:6];
+    assign map_addr = {(3'd7 - y_tile), x_tile};
 
     // DDA State Machine
     always @(posedge clk or negedge rst_n) begin

@@ -1,0 +1,25 @@
+// 8x8 map for Wolfenstein raycaster
+// 0 = empty, 1 = wall type 1, 2 = wall type 2, 3 = wall type 3
+// Y axis: y=0 is bottom, y=7 is top (anti-gravity direction)
+// File layout matches game view: top of file = top of game world
+//
+// Row 0 in file -> y=7 (top of game)
+// Row 7 in file -> y=0 (bottom of game)
+//
+//    x: 0 1 2 3 4 5 6 7
+// y=7 (top border)
+1 1 1 1 1 1 1 1
+// y=6
+1 0 0 0 0 0 0 1
+// y=5
+1 0 0 1 0 0 0 1
+// y=4
+1 0 0 0 0 0 0 1
+// y=3
+1 0 0 0 0 0 0 1
+// y=2
+1 0 0 1 0 0 0 1
+// y=1
+1 0 0 0 0 0 0 1
+// y=0 (bottom border)
+1 1 1 1 1 1 1 1
