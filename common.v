@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 `define RES_WIDTH 160
 `define RES_HEIGHT 120
 `define MAP_NOOF_TILE 8

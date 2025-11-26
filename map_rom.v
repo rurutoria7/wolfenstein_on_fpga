@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 module map_rom (
     input wire [5:0] addr,         // 6-bit address for 8x8 = 64 tiles
     output reg[1:0] data

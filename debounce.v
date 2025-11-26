@@ -1,7 +1,9 @@
+`timescale 1ns / 1ps
+
 module debounce (
 	input wire clk,
-	input wire pb, 
-	output wire pb_debounced 
+	input wire pb,
+	output wire pb_debounced
 );
 	reg [3:0] shift_reg; 
 

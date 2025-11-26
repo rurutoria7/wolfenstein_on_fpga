@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 module vga_controller (
     input wire pclk, reset,
     output wire hsync, vsync, valid,

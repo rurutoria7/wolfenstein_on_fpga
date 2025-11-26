@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 module one_pulse (
     input wire clk,
     input wire pb_in,

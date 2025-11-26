@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 module player_ctrl(
     input wire rst,
     input wire clk,
