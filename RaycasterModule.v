@@ -48,8 +48,8 @@ module RaycasterModule (
 
     // Ray angle for current column (computed from player angle + FOV offset)
     wire [9:0] current_ray_angle;
-    // assign current_ray_angle = a + col_count - (SCREEN_WIDTH / 2);
-    assign current_ray_angle = a; // Simplified for now
+    assign current_ray_angle = a + (col_count - (SCREEN_WIDTH / 2)) * 2;
+    // assign current_ray_angle = a; // Simplified for now
 
     // Precalc module outputs
     wire signed [15:0] pc_vrx, pc_vry, pc_vxo, pc_vyo;
@@ -139,6 +139,8 @@ module RaycasterModule (
         .SCREEN_HEIGHT(SCREEN_HEIGHT),
         .TILE_WIDTH(CELL_SIZE)
     ) expr_inst (
+        .ray_angle(current_ray_angle),
+        .player_angle(a),
         .vdis(vdis),
         .hdis(hdis),
         .v_hit(ver_dda_hit),
@@ -540,6 +542,10 @@ module Expression #(
     parameter SCREEN_HEIGHT = 120,
     parameter TILE_WIDTH = 64
 ) (
+    // Input: ray angles for fisheye correction
+    input wire [9:0] ray_angle,             // Current ray angle
+    input wire [9:0] player_angle,          // Player facing angle
+
     // Input: distances squared from DDA modules
     input wire signed [31:0] vdis,          // Vertical wall distance squared
     input wire signed [31:0] hdis,          // Horizontal wall distance squared
@@ -564,6 +570,38 @@ module Expression #(
     assign is_horizontal_wall = !use_vertical;
 
     // =========================================================================
+    // Fisheye correction - apply cos^2(theta) to distance
+    // =========================================================================
+    wire signed [15:0] cos_theta;  // Q9.7 format from TrigLUT
+    wire [9:0] angle_diff;
+
+    // Calculate angle difference (wraps around automatically with 10-bit arithmetic)
+    assign angle_diff = ray_angle - player_angle;
+
+    // Instantiate TrigLUT to get cos(angle_diff)
+    TrigLUT_sim_only #(
+        .WIDTH_TRIG(16),
+        .FRAC_BITS(7)
+    ) fisheye_correction_lut (
+        .in_angle(angle_diff),
+        .out_sin(),              // Unused
+        .out_cos(cos_theta),
+        .out_tan(),              // Unused
+        .out_cot()               // Unused
+    );
+
+    // Calculate cos^2(theta) - Q9.7 format
+    // cos_theta is Q9.7, multiply gives Q9.14, shift right 7 to get Q9.7
+    wire signed [31:0] cos_theta_sq_full = cos_theta * cos_theta;
+    wire signed [15:0] cos_theta_sq = cos_theta_sq_full >>> 7;
+
+    // Apply correction: corrected_dis = final_dis * cos^2(theta)
+    // final_dis is 32-bit, cos_theta_sq is Q9.7 16-bit
+    // Result needs to be shifted right by 7 bits
+    wire signed [47:0] corrected_dis_full = final_dis * cos_theta_sq;
+    wire signed [31:0] corrected_dis = corrected_dis_full >>> 7;
+
+    // =========================================================================
     // Function to calculate distance threshold squared
     // Formula: threshold[H] = (7680 / H)^2 where 7680 = 120 * 64
     // =========================================================================
@@ -579,6 +617,7 @@ module Expression #(
 
     // =========================================================================
     // Height calculation using priority encoder (for loop in always @(*))
+    // Use corrected_dis instead of final_dis for fisheye correction
     // =========================================================================
     reg [6:0] lineH;
     integer j;
@@ -592,7 +631,7 @@ module Expression #(
             // Loop from 120 down to 1 to find the first matching threshold
             // This synthesizes to a priority encoder (combinational logic)
             for (j = 120; j >= 1; j = j - 1) begin
-                if ($signed(final_dis) <= $signed(calc_dis_sq(j))) begin
+                if ($signed(corrected_dis) <= $signed(calc_dis_sq(j))) begin
                     lineH = j[6:0];
                 end
             end

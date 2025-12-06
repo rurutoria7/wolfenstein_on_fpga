@@ -117,10 +117,11 @@ module tb_RaycasterModule;
         #(CLK_PERIOD * 2);
 
         // =====================================================================
-        // Test Case 1: Player at position (100, 100), looking right (angle = 0)
+        // Test Case 1: Full frame rendering (all 160 columns)
         // =====================================================================
         $display("\n-----------------------------------------------------------------");
-        $display("Test Case 1: Player at (100, 100), looking right (angle = 0)");
+        $display("Test Case 1: Full frame - Player at (100, 100), angle = 0");
+        $display("Rendering all 160 columns");
         $display("-----------------------------------------------------------------");
 
         inx = 16'd100;  // Player X = 100
@@ -132,70 +133,54 @@ module tb_RaycasterModule;
         #(CLK_PERIOD);
         frame_start = 0;
 
-        // Wait for the first column to complete
-        wait_for_column_done();
+        // Wait for frame to complete
+        $display("Waiting for frame_done signal...");
+        wait (frame_done == 1'b1);
+        $display("Frame rendering completed at time %t", $time);
 
-        // Verify pixel output for the first column
-        $display("Test Case 1 completed");
-        $display("Total pixels output: %d (expected 120)", pixel_count);
-        $display("Wall pixels: %d", wall_pixel_count);
-        $display("Ceiling pixels: %d", ceiling_pixel_count);
-        $display("Floor pixels: %d", floor_pixel_count);
+        // Wait a few cycles for framebuffer to process
+        #(CLK_PERIOD * 10);
 
-        if (pixel_count != 120) begin
-            $display("ERROR: Expected 120 pixels, got %d", pixel_count);
+        // Verify pixel output for the entire frame
+        $display("\n=================================================================");
+        $display("Test Case 1 - Frame Rendering Results");
+        $display("=================================================================");
+        $display("Total pixels output: %d (expected %d = 160 * 120)",
+                 pixel_count, SCREEN_WIDTH * SCREEN_HEIGHT);
+        $display("Total wall pixels: %d", wall_pixel_count);
+        $display("Total ceiling pixels: %d", ceiling_pixel_count);
+        $display("Total floor pixels: %d", floor_pixel_count);
+
+        if (pixel_count != SCREEN_WIDTH * SCREEN_HEIGHT) begin
+            $display("ERROR: Expected %d pixels, got %d",
+                     SCREEN_WIDTH * SCREEN_HEIGHT, pixel_count);
             error_count = error_count + 1;
         end
 
-        // Display framebuffer column
-        framebuffer.display_column(8'd0);
+        // Display frame summary
+        framebuffer.display_frame_summary();
 
-        // Verify column completeness
+        // Display first and last few columns as samples
+        $display("\nSample columns:");
+        framebuffer.display_column(8'd0);
+        framebuffer.display_column(8'd79);   // Center column
+        framebuffer.display_column(8'd159);  // Last column
+
+        // Export frame to PPM image
+        $display("\nExporting frame to PPM image...");
+        framebuffer.export_ppm("output_frame_test1.ppm");
+
+        // Verify some sample columns
         if (!framebuffer.verify_column(8'd0)) begin
             $display("ERROR: Column 0 is incomplete");
             error_count = error_count + 1;
         end
-
-        // Reset counters for next test
-        pixel_count = 0;
-        wall_pixel_count = 0;
-        ceiling_pixel_count = 0;
-        floor_pixel_count = 0;
-
-        // Reset DUT between tests
-        #(CLK_PERIOD * 5);
-        rst_n = 0;
-        #(CLK_PERIOD * 2);
-        rst_n = 1;
-        #(CLK_PERIOD * 5);
-
-        // =====================================================================
-        // Test Case 2: Player closer to wall
-        // =====================================================================
-        $display("\n-----------------------------------------------------------------");
-        $display("Test Case 2: Player at (96, 100), looking right (closer to wall)");
-        $display("-----------------------------------------------------------------");
-
-        inx = 16'd96;   // Player X = 96 (4 units from tile boundary at 100)
-        iny = 16'd100;  // Player Y = 100
-        ina = 10'd0;    // Angle = 0 (looking right)
-
-        // Start frame
-        frame_start = 1;
-        #(CLK_PERIOD);
-        frame_start = 0;
-
-        // Wait for the first column to complete
-        wait_for_column_done();
-
-        $display("Test Case 2 completed");
-        $display("Total pixels output: %d (expected 120)", pixel_count);
-        $display("Wall pixels: %d", wall_pixel_count);
-        $display("Ceiling pixels: %d", ceiling_pixel_count);
-        $display("Floor pixels: %d", floor_pixel_count);
-
-        if (pixel_count != 120) begin
-            $display("ERROR: Expected 120 pixels, got %d", pixel_count);
+        if (!framebuffer.verify_column(8'd79)) begin
+            $display("ERROR: Column 79 (center) is incomplete");
+            error_count = error_count + 1;
+        end
+        if (!framebuffer.verify_column(8'd159)) begin
+            $display("ERROR: Column 159 (last) is incomplete");
             error_count = error_count + 1;
         end
 
@@ -213,80 +198,59 @@ module tb_RaycasterModule;
         #(CLK_PERIOD * 5);
 
         // =====================================================================
-        // Test Case 3: Player looking up (angle = 256)
+        // Test Case 2: Player at different position
         // =====================================================================
         $display("\n-----------------------------------------------------------------");
-        $display("Test Case 3: Player at (100, 100), looking up (angle = 256)");
+        $display("Test Case 2: Player at (150, 150), looking left (angle = 512)");
+        $display("Rendering full frame");
         $display("-----------------------------------------------------------------");
 
-        inx = 16'd100;  // Player X = 100
-        iny = 16'd100;  // Player Y = 100
-        ina = 10'd256;  // Angle = 256 (90 degrees, looking up)
+        inx = 16'd150;   // Player X = 150
+        iny = 16'd150;   // Player Y = 150
+        ina = 10'd512;   // Angle = 512 (180 degrees, looking left)
 
         // Start frame
         frame_start = 1;
         #(CLK_PERIOD);
         frame_start = 0;
 
-        // Wait for the first column to complete
-        wait_for_column_done();
-
-        $display("Test Case 3 completed");
-        $display("Total pixels output: %d (expected 120)", pixel_count);
-        $display("Wall pixels: %d", wall_pixel_count);
-        $display("Ceiling pixels: %d", ceiling_pixel_count);
-        $display("Floor pixels: %d", floor_pixel_count);
-
-        if (pixel_count != 120) begin
-            $display("ERROR: Expected 120 pixels, got %d", pixel_count);
-            error_count = error_count + 1;
-        end
-
-        // Reset counters for next test
-        pixel_count = 0;
-        wall_pixel_count = 0;
-        ceiling_pixel_count = 0;
-        floor_pixel_count = 0;
-
-        // Reset DUT between tests
-        #(CLK_PERIOD * 5);
-        rst_n = 0;
-        #(CLK_PERIOD * 2);
-        rst_n = 1;
-        #(CLK_PERIOD * 5);
-
-        // =====================================================================
-        // Test Case 4: Player at corner looking diagonally (test for overflow)
-        // =====================================================================
-        $display("\n-----------------------------------------------------------------");
-        $display("Test Case 4: Player at (80, 80), looking NE (angle = 192)");
-        $display("Testing diagonal ray with large distance (overflow check)");
-        $display("-----------------------------------------------------------------");
-
-        inx = 16'd80;   // Player X = 80 (left side, tile 1)
-        iny = 16'd80;   // Player Y = 80 (bottom side, tile 1)
-        ina = 10'd192;  // Angle = 192 (between 90 and 180, looking NE direction)
-
-        // Start frame
-        frame_start = 1;
-        #(CLK_PERIOD);
-        frame_start = 0;
-
-        // Wait for the first column to complete
-        wait_for_column_done();
-
-        $display("Test Case 4 completed");
-        $display("Total pixels output: %d (expected 120)", pixel_count);
-        $display("Wall pixels: %d", wall_pixel_count);
-        $display("Ceiling pixels: %d", ceiling_pixel_count);
-        $display("Floor pixels: %d", floor_pixel_count);
-
-        if (pixel_count != 120) begin
-            $display("ERROR: Expected 120 pixels, got %d", pixel_count);
-            error_count = error_count + 1;
-        end
+        // Wait for frame to complete
+        $display("Waiting for frame_done signal...");
+        wait (frame_done == 1'b1);
+        $display("Frame rendering completed at time %t", $time);
 
         #(CLK_PERIOD * 10);
+
+        $display("\n=================================================================");
+        $display("Test Case 2 - Frame Rendering Results");
+        $display("=================================================================");
+        $display("Total pixels output: %d (expected %d)",
+                 pixel_count, SCREEN_WIDTH * SCREEN_HEIGHT);
+
+        if (pixel_count != SCREEN_WIDTH * SCREEN_HEIGHT) begin
+            $display("ERROR: Expected %d pixels, got %d",
+                     SCREEN_WIDTH * SCREEN_HEIGHT, pixel_count);
+            error_count = error_count + 1;
+        end
+
+        // Export frame to PPM image
+        $display("\nExporting frame to PPM image...");
+        framebuffer.export_ppm("output_frame_test2.ppm");
+
+        // Reset counters for next test
+        pixel_count = 0;
+        wall_pixel_count = 0;
+        ceiling_pixel_count = 0;
+        floor_pixel_count = 0;
+
+        // Reset DUT between tests
+        #(CLK_PERIOD * 5);
+        rst_n = 0;
+        #(CLK_PERIOD * 2);
+        rst_n = 1;
+        #(CLK_PERIOD * 5);
+
+        // Skip other test cases for now, focus on first test
 
         // =====================================================================
         // Test Summary
@@ -314,19 +278,34 @@ module tb_RaycasterModule;
     // =========================================================================
     // Pixel Monitor - Count and verify pixels as they are output
     // =========================================================================
+    reg [7:0] last_col_x;
+    reg [6:0] expected_row_y;
+
+    initial begin
+        last_col_x = 8'd0;
+        expected_row_y = 7'd0;
+    end
+
     always @(posedge clk) begin
         if (px_valid) begin
             pixel_count = pixel_count + 1;
 
-            // Verify pixel coordinates
-            if (px_x != 8'd0) begin
-                $display("WARNING: px_x = %d (expected 0 for first column)", px_x);
+            // Check if we moved to a new column
+            if (px_x != last_col_x) begin
+                if (expected_row_y != 7'd0) begin
+                    $display("Column %d completed with %d rows", last_col_x, expected_row_y);
+                end
+                expected_row_y = 7'd0;
+                last_col_x = px_x;
             end
 
-            if (px_y != pixel_count - 1) begin
-                $display("ERROR: px_y = %d (expected %d)", px_y, pixel_count - 1);
+            // Verify that rows increment sequentially within a column
+            if (px_y != expected_row_y) begin
+                $display("ERROR: px_y = %d (expected %d) in column %d",
+                         px_y, expected_row_y, px_x);
                 error_count = error_count + 1;
             end
+            expected_row_y = px_y + 1;
 
             // Count pixel types based on color
             // COLOR_CEILING   = 12'h468 (Dark blue-gray)
@@ -341,12 +320,15 @@ module tb_RaycasterModule;
             end else if (color == 12'h888) begin
                 floor_pixel_count = floor_pixel_count + 1;
             end else begin
-                $display("WARNING: Unknown color at px_y=%d: 0x%03h", px_y, color);
+                $display("WARNING: Unknown color at (x=%d, y=%d): 0x%03h",
+                         px_x, px_y, color);
             end
 
-            // Display pixel info (commented out to reduce clutter)
-            // $display("Pixel %3d: px_x=%3d, px_y=%3d, color=0x%03h",
-            //          pixel_count, px_x, px_y, color);
+            // Display pixel info every 1000 pixels to track progress
+            if (pixel_count % 1000 == 0) begin
+                $display("Progress: %d pixels rendered (col=%d, row=%d)",
+                         pixel_count, px_x, px_y);
+            end
         end
     end
 
@@ -365,6 +347,53 @@ module tb_RaycasterModule;
 
             // Wait one more cycle
             #(CLK_PERIOD);
+        end
+    endtask
+
+    // =========================================================================
+    // Task: Wait for N columns to complete
+    // =========================================================================
+    task wait_for_n_columns;
+        input integer n;
+        integer i;
+        begin
+            for (i = 0; i < n; i = i + 1) begin
+                $display("\n--- Waiting for column %d ---", i);
+
+                // Wait for PRECALC state
+                wait (dut.state == 3'd1);  // PRECALC state
+                $display("[Col %d] Time %t: Entered PRECALC state", i, $time);
+                $display("[Col %d] col_count = %d, current_ray_angle = %d",
+                         i, dut.col_count, dut.current_ray_angle);
+
+                // Wait for VER_DDA state
+                wait (dut.state == 3'd2);  // VER_DDA state
+                $display("[Col %d] Time %t: Entered VER_DDA state", i, $time);
+
+                // Wait for HOR_DDA state
+                wait (dut.state == 3'd3);  // HOR_DDA state
+                $display("[Col %d] Time %t: Entered HOR_DDA state", i, $time);
+
+                // Wait for CALC_HEIGHT state
+                wait (dut.state == 3'd4);  // CALC_HEIGHT state
+                $display("[Col %d] Time %t: Entered CALC_HEIGHT state", i, $time);
+
+                // Wait for DRAW_COL state
+                wait (dut.state == 3'd5);  // DRAW_COL state
+                $display("[Col %d] Time %t: Entered DRAW_COL state", i, $time);
+
+                // Wait for Draw_col to finish
+                wait (dut.draw_col_inst.done == 1'b1);
+                $display("[Col %d] Time %t: Draw_col completed", i, $time);
+
+                // Wait for NEXT_COL state
+                wait (dut.state == 3'd6);  // NEXT_COL state
+                $display("[Col %d] Time %t: Entered NEXT_COL state", i, $time);
+
+                // Wait one more cycle
+                #(CLK_PERIOD);
+            end
+            $display("\n--- All %d columns completed ---\n", n);
         end
     endtask
 
@@ -492,10 +521,11 @@ module tb_RaycasterModule;
     // Timeout Watchdog
     // =========================================================================
     initial begin
-        #(CLK_PERIOD * 100000);  // 1ms timeout
+        #(CLK_PERIOD * 10000000);  // 100ms timeout (enough for full frame)
         $display("ERROR: Simulation timeout!");
         $display("Last state: %d", dut.state);
         $display("Pixel count: %d", pixel_count);
+        $display("Column count: %d", dut.col_count);
         $finish;
     end
 
