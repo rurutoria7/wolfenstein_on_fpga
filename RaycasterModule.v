@@ -41,40 +41,10 @@ module RaycasterModule (
     // Internal registers for current ray
     reg [15:0] x, y;               // Current player position (16-bit world coords)
     reg [9:0] a;                   // Current player angle
-    reg signed [15:0] rx, ry;      // Ray position (signed for calculations)
-    reg signed [15:0] xo, yo;      // Ray offset per step
     reg [7:0] col_count;           // Current column being rendered (0-159)
-    reg [6:0] row_count;           // Current row in column (0-119)
-
-    // Distance and height calculation
-    reg signed [31:0] vdis;        // Vertical wall distance
-    reg signed [31:0] hdis;        // Horizontal wall distance
-    reg signed [31:0] final_dis;   // Final distance (minimum of vdis, hdis)
-    reg [15:0] wall_height;        // Calculated wall height
-    reg [6:0] line_off;            // Line offset from center
-    reg [6:0] line_height;         // Line height to draw
-
-    // Vertical DDA state
-    reg signed [15:0] ver_rx, ver_ry;
-    reg signed [15:0] ver_xo, ver_yo;
-    reg [3:0] ver_depth;
-    reg ver_skip;
-
-    // Horizontal DDA state
-    reg signed [15:0] hor_rx, hor_ry;
-    reg signed [15:0] hor_xo, hor_yo;
-    reg [3:0] hor_depth;
-    reg hor_skip;
 
     // PRECALC done flag
     reg precalc_done;
-    reg [3:0] precalc_stage;
-
-    // Ray angle for current column
-    reg signed [10:0] ray_angle;   // Signed 11-bit for angle calculation
-
-    // Color determination
-    reg is_horizontal_wall;
 
     // Ray angle for current column (computed from player angle + FOV offset)
     wire [9:0] current_ray_angle;
@@ -85,6 +55,10 @@ module RaycasterModule (
     wire signed [15:0] pc_vrx, pc_vry, pc_vxo, pc_vyo;
     wire signed [15:0] pc_hrx, pc_hry, pc_hxo, pc_hyo;
     wire pc_vskip, pc_hskip;
+
+    // Wire connections for Expression module inputs
+    wire signed [31:0] vdis = ver_dda_dis;
+    wire signed [31:0] hdis = hor_dda_dis;
 
     // Instantiate Precalc module
     Precalc #(
@@ -296,116 +270,14 @@ module RaycasterModule (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             precalc_done <= 0;
-            precalc_stage <= 0;
-            ray_angle <= 0;
-            ver_skip <= 0;
-            hor_skip <= 0;
         end else begin
             if (state == PRECALC) begin
-                ray_angle <= $signed({1'b0, current_ray_angle});
-                ver_rx <= pc_vrx;
-                ver_ry <= pc_vry;
-                ver_xo <= pc_vxo;
-                ver_yo <= pc_vyo;
-                ver_depth <= 0;
-                ver_skip <= pc_vskip;
-                hor_rx <= pc_hrx;
-                hor_ry <= pc_hry;
-                hor_xo <= pc_hxo;
-                hor_yo <= pc_hyo;
-                hor_depth <= 0;
-                hor_skip <= pc_hskip;
-
                 precalc_done <= 1;
             end else begin
                 precalc_done <= 0;
             end
         end
     end
-
-    // Latch distances from DDA modules
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            vdis <= 0;
-            hdis <= 0;
-        end else begin
-            if (state == VER_DDA && ver_dda_done) begin
-                vdis <= ver_dda_dis;
-            end
-            if (state == HOR_DDA && hor_dda_done) begin
-                hdis <= hor_dda_dis;
-            end
-        end
-    end
-
-    // // CALC_HEIGHT state: Calculate wall height
-    // always @(posedge clk or negedge rst_n) begin
-    //     if (!rst_n) begin
-    //         line_height <= 0;
-    //         line_off <= 0;
-    //     end else begin
-    //         if (state == CALC_HEIGHT) begin
-    //             // height = SCREEN_HEIGHT / (distance / constant)
-    //             // Simplified calculation
-    //             if (final_dis > 0) begin
-    //                 // Prevent division by zero and calculate wall height
-    //                 // This is a placeholder - needs proper implementation
-    //                 // wall_height should be inversely proportional to distance
-    //                 if (final_dis < 32'd10000)
-    //                     line_height <= 7'd120;  // Very close
-    //                 else if (final_dis < 32'd40000)
-    //                     line_height <= 7'd60;
-    //                 else if (final_dis < 32'd90000)
-    //                     line_height <= 7'd30;
-    //                 else
-    //                     line_height <= 7'd10;
-
-    //                 // Center the line
-    //                 line_off <= (SCREEN_HEIGHT - line_height) >> 1;
-    //             end else begin
-    //                 line_height <= 0;
-    //                 line_off <= 0;
-    //             end
-
-    //             row_count <= 0;
-    //         end
-    //     end
-    // end
-
-    // // DRAW_COL state: Output pixels for current column
-    // always @(posedge clk or negedge rst_n) begin
-    //     if (!rst_n) begin
-    //         px_x <= 0;
-    //         px_y <= 0;
-    //         color <= 0;
-    //         px_valid <= 0;
-    //     end else begin
-    //         if (state == DRAW_COL) begin
-    //             px_x <= col_count;
-    //             px_y <= row_count;
-    //             px_valid <= 1;
-
-    //             // Determine color based on position
-    //             if (row_count < line_off) begin
-    //                 // Ceiling
-    //                 color <= 8'h40;  // Dark gray
-    //             end else if (row_count < line_off + line_height) begin
-    //                 // Wall
-    //                 if (is_horizontal_wall)
-    //                     color <= 8'hFF;  // White for horizontal walls
-    //                 else
-    //                     color <= 8'hC0;  // Light gray for vertical walls
-    //             end else begin
-    //                 // Floor
-    //                 color <= 8'h80;  // Medium gray
-    //             end
-
-    //             row_count <= row_count + 1;
-    //         end else begin
-    //             px_valid <= 0;
-    //         end
-    //     end
-    // end
 
 endmodule
 
