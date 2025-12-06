@@ -11,10 +11,10 @@ module RaycasterModule (
     input wire [9:0] ina,          // Player angle (0-1023, maps to 0-2π)
 
     // Pixel output
-    output reg [7:0] px_x,         // Pixel X coordinate (0-159)
-    output reg [6:0] px_y,         // Pixel Y coordinate (0-119)
-    output reg [7:0] color,        // Pixel color
-    output reg px_valid,           // Pixel output valid
+    output wire [7:0] px_x,        // Pixel X coordinate (0-159)
+    output wire [6:0] px_y,        // Pixel Y coordinate (0-119)
+    output wire [11:0] color,      // Pixel color (RGB444 format)
+    output wire px_valid,          // Pixel output valid
 
 
     // Status
@@ -154,6 +154,48 @@ module RaycasterModule (
         .hit(hor_dda_hit)
     );
 
+    // Expression module outputs
+    wire [6:0] expr_line_height;
+    wire [6:0] expr_draw_begin;
+    wire [6:0] expr_draw_end;
+    wire expr_is_horizontal;
+
+    // Instantiate Expression module (combinational logic)
+    Expression #(
+        .SCREEN_HEIGHT(SCREEN_HEIGHT),
+        .TILE_WIDTH(CELL_SIZE)
+    ) expr_inst (
+        .vdis(vdis),
+        .hdis(hdis),
+        .v_hit(ver_dda_hit),
+        .h_hit(hor_dda_hit),
+        .line_height(expr_line_height),
+        .draw_begin(expr_draw_begin),
+        .draw_end(expr_draw_end),
+        .is_horizontal_wall(expr_is_horizontal)
+    );
+
+    // Draw_col module outputs
+    wire draw_col_done;
+
+    // Instantiate Draw_col module (sequential logic)
+    Draw_col #(
+        .SCREEN_HEIGHT(SCREEN_HEIGHT)
+    ) draw_col_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(state == CALC_HEIGHT),
+        .draw_begin(expr_draw_begin),
+        .draw_end(expr_draw_end),
+        .col_x(col_count),
+        .is_horizontal_wall(expr_is_horizontal),
+        .px_x(px_x),
+        .px_y(px_y),
+        .color(color),
+        .px_valid(px_valid),
+        .done(draw_col_done)
+    );
+
     //=======================================================================
     // State Register
     //=======================================================================
@@ -190,23 +232,24 @@ module RaycasterModule (
                     next_state = CALC_HEIGHT;
             end
 
-            // CALC_HEIGHT: begin
-            //     next_state = DRAW_COL;
-            // end
+            CALC_HEIGHT: begin
+                // Single cycle, directly go to DRAW_COL
+                next_state = DRAW_COL;
+            end
 
-            // DRAW_COL: begin
-            //     if (row_count >= SCREEN_HEIGHT - 1)
-            //         next_state = NEXT_COL;
-            // end
+            DRAW_COL: begin
+                if (draw_col_done)
+                    next_state = NEXT_COL;
+            end
 
-            // NEXT_COL: begin
-            //     if (col_count >= SCREEN_WIDTH - 1)
-            //         next_state = IDLE;
-            //     else
-            //         next_state = PRECALC;
-            // end
+            NEXT_COL: begin
+                if (col_count >= SCREEN_WIDTH - 1)
+                    next_state = IDLE;
+                else
+                    next_state = PRECALC;
+            end
 
-            // default: next_state = IDLE;
+            default: next_state = IDLE;
         endcase
     end
 
@@ -276,6 +319,21 @@ module RaycasterModule (
                 precalc_done <= 1;
             end else begin
                 precalc_done <= 0;
+            end
+        end
+    end
+
+    // Latch distances from DDA modules
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            vdis <= 0;
+            hdis <= 0;
+        end else begin
+            if (state == VER_DDA && ver_dda_done) begin
+                vdis <= ver_dda_dis;
+            end
+            if (state == HOR_DDA && hor_dda_done) begin
+                hdis <= hor_dda_dis;
             end
         end
     end
@@ -596,6 +654,237 @@ module RayDDA #(
                 end
 
                 default: dda_state <= DDA_IDLE;
+            endcase
+        end
+    end
+
+endmodule
+
+
+//=============================================================================
+// Expression Module - Calculate wall height from distance (Combinational Logic)
+//=============================================================================
+module Expression #(
+    parameter SCREEN_HEIGHT = 120,
+    parameter TILE_WIDTH = 64
+) (
+    // Input: distances squared from DDA modules
+    input wire signed [31:0] vdis,          // Vertical wall distance squared
+    input wire signed [31:0] hdis,          // Horizontal wall distance squared
+    input wire v_hit,                       // Vertical wall hit flag
+    input wire h_hit,                       // Horizontal wall hit flag
+
+    // Output: drawing parameters
+    output wire [6:0] line_height,          // Wall line height (0-120)
+    output wire [6:0] draw_begin,           // Wall start y coordinate
+    output wire [6:0] draw_end,             // Wall end y coordinate
+    output wire is_horizontal_wall          // Wall orientation (for color)
+);
+
+    // =========================================================================
+    // Wall selection logic - choose the nearest wall
+    // =========================================================================
+    wire use_vertical = (!v_hit) ? 1'b0 :
+                        (!h_hit) ? 1'b1 :
+                        (vdis <= hdis);
+
+    wire signed [31:0] final_dis = use_vertical ? vdis : hdis;
+    assign is_horizontal_wall = !use_vertical;
+
+    // =========================================================================
+    // Function to calculate distance threshold squared
+    // Formula: threshold[H] = (7680 / H)^2 where 7680 = 120 * 64
+    // =========================================================================
+    function automatic signed [31:0] calc_dis_sq;
+        input integer height;
+        begin
+            if (height == 0)
+                calc_dis_sq = 32'h7FFFFFFF;  // Maximum value
+            else
+                calc_dis_sq = (7680 * 7680) / (height * height);
+        end
+    endfunction
+
+    // =========================================================================
+    // Height calculation using priority encoder (for loop in always @(*))
+    // =========================================================================
+    reg [6:0] lineH;
+    integer j;
+
+    always @(*) begin
+        if (!v_hit && !h_hit) begin
+            lineH = 7'd0;  // No wall hit
+        end else begin
+            lineH = 7'd1;  // Default: farthest distance
+
+            // Loop from 120 down to 1 to find the first matching threshold
+            // This synthesizes to a priority encoder (combinational logic)
+            for (j = 120; j >= 1; j = j - 1) begin
+                if ($signed(final_dis) <= $signed(calc_dis_sq(j))) begin
+                    lineH = j[6:0];
+                end
+            end
+        end
+    end
+
+    // =========================================================================
+    // Calculate drawing coordinates (vertical centering)
+    // =========================================================================
+    assign line_height = lineH;
+    assign draw_begin = 7'd60 - (lineH >> 1);  // 60 - lineH/2
+    assign draw_end = 7'd60 + (lineH >> 1);    // 60 + lineH/2
+
+endmodule
+
+
+//=============================================================================
+// Draw_col Module - Draw one column of pixels (Sequential Logic)
+//=============================================================================
+module Draw_col #(
+    parameter SCREEN_HEIGHT = 120
+) (
+    input wire clk,
+    input wire rst_n,
+    input wire start,                       // Start drawing signal
+
+    // Drawing parameters from Expression module
+    input wire [6:0] draw_begin,            // Wall start y
+    input wire [6:0] draw_end,              // Wall end y
+    input wire [7:0] col_x,                 // Column x coordinate
+    input wire is_horizontal_wall,          // Wall orientation
+
+    // Pixel output (RGB444 format)
+    output reg [7:0] px_x,                  // Pixel x
+    output reg [6:0] px_y,                  // Pixel y
+    output reg [11:0] color,                // RGB444 color {R[3:0], G[3:0], B[3:0]}
+    output reg px_valid,                    // Pixel valid flag
+
+    // Control signal
+    output reg done                         // Column drawing complete
+);
+
+    // =========================================================================
+    // FSM States
+    // =========================================================================
+    localparam IDLE = 2'b00;
+    localparam DRAW = 2'b01;
+    localparam DONE = 2'b10;
+
+    reg [1:0] state, next_state;
+
+    // =========================================================================
+    // RGB444 Color definitions
+    // =========================================================================
+    localparam [11:0] COLOR_CEILING   = 12'h468;  // Dark blue-gray (R=4, G=6, B=8)
+    localparam [11:0] COLOR_WALL_H    = 12'hFFF;  // White (horizontal wall)
+    localparam [11:0] COLOR_WALL_V    = 12'hCCC;  // Light gray (vertical wall)
+    localparam [11:0] COLOR_FLOOR     = 12'h888;  // Medium gray (floor)
+
+    // =========================================================================
+    // Internal registers
+    // =========================================================================
+    reg [6:0] row_counter;                  // Current row being drawn (0-119)
+
+    // Latched input parameters
+    reg [6:0] draw_begin_r, draw_end_r;
+    reg [7:0] col_x_r;
+    reg is_horizontal_wall_r;
+
+    // =========================================================================
+    // State register
+    // =========================================================================
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            state <= IDLE;
+        else
+            state <= next_state;
+    end
+
+    // =========================================================================
+    // Next state logic
+    // =========================================================================
+    always @(*) begin
+        next_state = state;
+        case (state)
+            IDLE: begin
+                if (start)
+                    next_state = DRAW;
+            end
+
+            DRAW: begin
+                if (row_counter >= SCREEN_HEIGHT - 1)
+                    next_state = DONE;
+            end
+
+            DONE: begin
+                next_state = IDLE;
+            end
+
+            default: next_state = IDLE;
+        endcase
+    end
+
+    // =========================================================================
+    // Datapath logic
+    // =========================================================================
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            row_counter <= 0;
+            px_x <= 0;
+            px_y <= 0;
+            color <= 0;
+            px_valid <= 0;
+            done <= 0;
+            draw_begin_r <= 0;
+            draw_end_r <= 0;
+            col_x_r <= 0;
+            is_horizontal_wall_r <= 0;
+        end else begin
+            case (state)
+                IDLE: begin
+                    done <= 0;
+                    px_valid <= 0;
+                    if (start) begin
+                        // Latch input parameters
+                        draw_begin_r <= draw_begin;
+                        draw_end_r <= draw_end;
+                        col_x_r <= col_x;
+                        is_horizontal_wall_r <= is_horizontal_wall;
+                        row_counter <= 0;
+                    end
+                end
+
+                DRAW: begin
+                    // Output current pixel
+                    px_x <= col_x_r;
+                    px_y <= row_counter;
+                    px_valid <= 1;
+
+                    // Color decision logic (simple three-region method)
+                    if (row_counter < draw_begin_r) begin
+                        // Ceiling region
+                        color <= COLOR_CEILING;
+                    end else if (row_counter < draw_end_r) begin
+                        // Wall region
+                        color <= is_horizontal_wall_r ? COLOR_WALL_H : COLOR_WALL_V;
+                    end else begin
+                        // Floor region
+                        color <= COLOR_FLOOR;
+                    end
+
+                    // Increment row counter
+                    row_counter <= row_counter + 1;
+                end
+
+                DONE: begin
+                    px_valid <= 0;
+                    done <= 1;
+                end
+
+                default: begin
+                    px_valid <= 0;
+                    done <= 0;
+                end
             endcase
         end
     end
