@@ -7,9 +7,9 @@ module player_ctrl(
     input wire backward,
     input wire left,
     input wire right,
-    output reg[2:0] x,
-    output reg[2:0] y,
-    output reg[8:0] angle
+    output reg[15:0] x,
+    output reg[15:0] y,
+    output reg[9:0] angle
 );
     // debounce part
     wire net_forward, net_backward, net_left, net_right;
@@ -57,61 +57,67 @@ module player_ctrl(
     );
     // map
     wire [1:0] data;
-    reg[2:0] new_x, new_y;
+    reg[15:0] new_x, new_y;
+    reg[9:0] new_angle;
     map_rom mp(
         .addr(new_y*8 + new_x),
         .data(data)
     );
+    // triangle
+    reg[15:0] sin, cos, tan, cot;
+    TrigLUT t0(
+        .in_angle(angle),
+        .out_sin(sin),
+        .out_cos(cos),
+        .out_tan(tan),
+        .out_cot(cot)
+    );
     // player data
     parameter speed = 1;
-    parameter turn_speed = 90; // unit is degree
+    parameter turn_speed = 1;
 
     // FSM
     always@(posedge clk or posedge rst) begin
         if(rst) begin
-            // initial position
             x <= 0;
             y <= 0;
             angle <= 0;
-            new_x <= 0;
-            new_y <= 0;
         end else begin
-            // walk
-            if(forward) begin
-                // check whether hit wall
-                case(angle)
-                    0: new_y = y - 1;
-                    90: new_x = x + 1;
-                    180: new_y = y + 1;
-                    270: new_x = x - 1;
-                endcase
-
-                if(data == 0) begin
-                    x <= new_x;
-                    y <= new_y;
-                end
-            end
-            if(backward) begin
-                // check whether hit wall
-                case(angle)
-                    0: new_y = y + 1;
-                    90: new_x = x - 1;
-                    180: new_y = y - 1;
-                    270: new_x = x + 1;
-                endcase
-
-                if(data == 0) begin
-                    x <= new_x;
-                    y <= new_y;
-                end
-            end
-            // turn
-            if(left) begin
-                angle <= (angle - turn_speed < 0) ? 360 + angle - turn_speed : angle - turn_speed;
-            end
-            if(right) begin
-                angle <= (angle + turn_speed) % 360;
-            end
+            x <= new_x;
+            y <= new_y;
+            angle <= new_angle;
         end
+    end
+
+    // forward & backward
+    always@(*) begin
+        if(forward) begin 
+            new_x = x - cos*speed;
+            new_y = y + sin * speed;
+        end 
+        
+        if(backward) begin
+            new_x = x + cos * speed;
+            new_y = y - sin * speed;
+        end
+
+        // check whether hit wall
+        if(data == 1) begin
+            new_x = x;
+            new_y = y;
+        end
+    end
+
+    // turn left or right
+    always@(*) begin
+        if(left) begin
+            new_angle = angle - turn_speed + 1024;
+        end
+
+        if(right) begin
+            new_angle = angle + turn_speed;
+        end
+
+        if(new_angle >= 1024) new_angle = (new_angle) % 1024;
     end
 endmodule
