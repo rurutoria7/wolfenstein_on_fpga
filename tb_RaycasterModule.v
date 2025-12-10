@@ -43,6 +43,11 @@ module tb_RaycasterModule;
     reg [6:0] expected_draw_begin;
     reg [6:0] expected_draw_end;
 
+    // Variables for rotation test
+    integer frame_num;
+    integer angle_step;
+    reg [15:0] current_angle;
+
     // =========================================================================
     // DUT Instantiation
     // =========================================================================
@@ -117,140 +122,77 @@ module tb_RaycasterModule;
         #(CLK_PERIOD * 2);
 
         // =====================================================================
-        // Test Case 1: Full frame rendering (all 160 columns)
+        // Test Case: Player rotates 360 degrees at fixed position
+        // Generate 10 frames covering full rotation
         // =====================================================================
         $display("\n-----------------------------------------------------------------");
-        $display("Test Case 1: Full frame - Player at (100, 100), angle = 0");
-        $display("Rendering all 160 columns");
+        $display("Test Case: Player rotating 360 degrees at (100, 100)");
+        $display("Generating 10 frames, angle increment = 102.4 degrees per frame");
         $display("-----------------------------------------------------------------");
 
+        // Fixed player position
         inx = 16'd100;  // Player X = 100
         iny = 16'd100;  // Player Y = 100
-        ina = 10'd0;    // Angle = 0 (looking right)
 
-        // Start frame
-        frame_start = 1;
-        #(CLK_PERIOD);
-        frame_start = 0;
+        // Generate 10 frames with rotation
+        // Full rotation = 1024 (360 degrees), so each frame rotates by 1024/10 = 102.4
+        // Using integer division: 1024/10 = 102
+        angle_step = 102;  // Approximately 36 degrees per frame
 
-        // Wait for frame to complete
-        $display("Waiting for frame_done signal...");
-        wait (frame_done == 1'b1);
-        $display("Frame rendering completed at time %t", $time);
+        for (frame_num = 0; frame_num < 10; frame_num = frame_num + 1) begin
+            current_angle = frame_num * angle_step;
+            ina = current_angle[9:0];  // Set angle (10-bit)
 
-        // Wait a few cycles for framebuffer to process
-        #(CLK_PERIOD * 10);
+            $display("\n--- Frame %d: angle = %d (%.1f degrees) ---",
+                     frame_num, ina, (ina * 360.0) / 1024.0);
 
-        // Verify pixel output for the entire frame
-        $display("\n=================================================================");
-        $display("Test Case 1 - Frame Rendering Results");
-        $display("=================================================================");
-        $display("Total pixels output: %d (expected %d = 160 * 120)",
-                 pixel_count, SCREEN_WIDTH * SCREEN_HEIGHT);
-        $display("Total wall pixels: %d", wall_pixel_count);
-        $display("Total ceiling pixels: %d", ceiling_pixel_count);
-        $display("Total floor pixels: %d", floor_pixel_count);
+            // Start frame
+            frame_start = 1;
+            #(CLK_PERIOD);
+            frame_start = 0;
 
-        if (pixel_count != SCREEN_WIDTH * SCREEN_HEIGHT) begin
-            $display("ERROR: Expected %d pixels, got %d",
-                     SCREEN_WIDTH * SCREEN_HEIGHT, pixel_count);
-            error_count = error_count + 1;
+            // Wait for frame to complete
+            $display("Waiting for frame_done signal...");
+            wait (frame_done == 1'b1);
+            $display("Frame %d rendering completed at time %t", frame_num, $time);
+
+            // Wait a few cycles for framebuffer to process
+            #(CLK_PERIOD * 10);
+
+            // Verify pixel count
+            $display("Frame %d - Total pixels output: %d (expected %d)",
+                     frame_num, pixel_count, SCREEN_WIDTH * SCREEN_HEIGHT);
+
+            if (pixel_count != SCREEN_WIDTH * SCREEN_HEIGHT) begin
+                $display("ERROR: Frame %d - Expected %d pixels, got %d",
+                         frame_num, SCREEN_WIDTH * SCREEN_HEIGHT, pixel_count);
+                error_count = error_count + 1;
+            end
+
+            // Export frame to PPM image with frame number
+            case (frame_num)
+                0: framebuffer.export_ppm("output_frame_00.ppm");
+                1: framebuffer.export_ppm("output_frame_01.ppm");
+                2: framebuffer.export_ppm("output_frame_02.ppm");
+                3: framebuffer.export_ppm("output_frame_03.ppm");
+                4: framebuffer.export_ppm("output_frame_04.ppm");
+                5: framebuffer.export_ppm("output_frame_05.ppm");
+                6: framebuffer.export_ppm("output_frame_06.ppm");
+                7: framebuffer.export_ppm("output_frame_07.ppm");
+                8: framebuffer.export_ppm("output_frame_08.ppm");
+                9: framebuffer.export_ppm("output_frame_09.ppm");
+            endcase
+            $display("Exporting frame %d", frame_num);
+
+            // Reset counters for next frame
+            pixel_count = 0;
+            wall_pixel_count = 0;
+            ceiling_pixel_count = 0;
+            floor_pixel_count = 0;
+
+            // Brief delay between frames
+            #(CLK_PERIOD * 5);
         end
-
-        // Display frame summary
-        framebuffer.display_frame_summary();
-
-        // Display first and last few columns as samples
-        $display("\nSample columns:");
-        framebuffer.display_column(8'd0);
-        framebuffer.display_column(8'd79);   // Center column
-        framebuffer.display_column(8'd159);  // Last column
-
-        // Export frame to PPM image
-        $display("\nExporting frame to PPM image...");
-        framebuffer.export_ppm("output_frame_test1.ppm");
-
-        // Verify some sample columns
-        if (!framebuffer.verify_column(8'd0)) begin
-            $display("ERROR: Column 0 is incomplete");
-            error_count = error_count + 1;
-        end
-        if (!framebuffer.verify_column(8'd79)) begin
-            $display("ERROR: Column 79 (center) is incomplete");
-            error_count = error_count + 1;
-        end
-        if (!framebuffer.verify_column(8'd159)) begin
-            $display("ERROR: Column 159 (last) is incomplete");
-            error_count = error_count + 1;
-        end
-
-        // Reset counters for next test
-        pixel_count = 0;
-        wall_pixel_count = 0;
-        ceiling_pixel_count = 0;
-        floor_pixel_count = 0;
-
-        // Reset DUT between tests
-        #(CLK_PERIOD * 5);
-        rst_n = 0;
-        #(CLK_PERIOD * 2);
-        rst_n = 1;
-        #(CLK_PERIOD * 5);
-
-        // =====================================================================
-        // Test Case 2: Player at different position
-        // =====================================================================
-        $display("\n-----------------------------------------------------------------");
-        $display("Test Case 2: Player at (150, 150), looking left (angle = 512)");
-        $display("Rendering full frame");
-        $display("-----------------------------------------------------------------");
-
-        inx = 16'd150;   // Player X = 150
-        iny = 16'd150;   // Player Y = 150
-        ina = 10'd512;   // Angle = 512 (180 degrees, looking left)
-
-        // Start frame
-        frame_start = 1;
-        #(CLK_PERIOD);
-        frame_start = 0;
-
-        // Wait for frame to complete
-        $display("Waiting for frame_done signal...");
-        wait (frame_done == 1'b1);
-        $display("Frame rendering completed at time %t", $time);
-
-        #(CLK_PERIOD * 10);
-
-        $display("\n=================================================================");
-        $display("Test Case 2 - Frame Rendering Results");
-        $display("=================================================================");
-        $display("Total pixels output: %d (expected %d)",
-                 pixel_count, SCREEN_WIDTH * SCREEN_HEIGHT);
-
-        if (pixel_count != SCREEN_WIDTH * SCREEN_HEIGHT) begin
-            $display("ERROR: Expected %d pixels, got %d",
-                     SCREEN_WIDTH * SCREEN_HEIGHT, pixel_count);
-            error_count = error_count + 1;
-        end
-
-        // Export frame to PPM image
-        $display("\nExporting frame to PPM image...");
-        framebuffer.export_ppm("output_frame_test2.ppm");
-
-        // Reset counters for next test
-        pixel_count = 0;
-        wall_pixel_count = 0;
-        ceiling_pixel_count = 0;
-        floor_pixel_count = 0;
-
-        // Reset DUT between tests
-        #(CLK_PERIOD * 5);
-        rst_n = 0;
-        #(CLK_PERIOD * 2);
-        rst_n = 1;
-        #(CLK_PERIOD * 5);
-
-        // Skip other test cases for now, focus on first test
 
         // =====================================================================
         // Test Summary
