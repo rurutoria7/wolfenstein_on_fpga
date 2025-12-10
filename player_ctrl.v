@@ -33,39 +33,25 @@ module player_ctrl(
         .pb(right),
         .pb_debounced(net_right)
     );
-    // one_pulse part
+    // 方向控制使用电平触发（不需要 one_pulse）
     wire db_forward, db_backward, db_left, db_right;
-    one_pulse op_f(
-        .clk(clk),
-        .pb_in(net_forward),
-        .pb_out(db_forward)
-    );
-    one_pulse op_b(
-        .clk(clk),
-        .pb_in(net_backward),
-        .pb_out(db_backward)
-    );
-    one_pulse op_l(
-        .clk(clk),
-        .pb_in(net_left),
-        .pb_out(db_left)
-    );
-    one_pulse op_r(
-        .clk(clk),
-        .pb_in(net_right),
-        .pb_out(db_right)
-    );
+    assign db_forward = net_forward;
+    assign db_backward = net_backward;
+    assign db_left = net_left;
+    assign db_right = net_right;
     // map
     wire [1:0] data;
     reg[15:0] new_x, new_y;
     reg[9:0] new_angle;
+    // Use current position for collision detection to avoid combinatorial loop
     map_rom mp(
-        .addr(new_y*8 + new_x),
+        .addr(y[15:6]*8 + x[15:6]),  // Use tile coordinates from current position
         .data(data)
     );
-    // triangle
-    reg[15:0] sin, cos, tan, cot;
+    // triangle lookup table (使用 Block RAM)
+    wire signed [15:0] sin, cos, tan, cot;
     TrigLUT t0(
+        .clk(clk),
         .in_angle(angle),
         .out_sin(sin),
         .out_cos(cos),
@@ -79,9 +65,9 @@ module player_ctrl(
     // FSM
     always@(posedge clk or posedge rst) begin
         if(rst) begin
-            x <= 0;
-            y <= 0;
-            angle <= 0;
+            x <= 16'd96;        // 1.5 个 tile (CELL_SIZE=64)
+            y <= 16'd96;        // 地图中央附近
+            angle <= 10'd256;   // 90度（朝东）
         end else begin
             x <= new_x;
             y <= new_y;
@@ -91,33 +77,33 @@ module player_ctrl(
 
     // forward & backward
     always@(*) begin
-        if(forward) begin 
+        // 默认保持当前位置
+        new_x = x;
+        new_y = y;
+
+        if(db_forward) begin
             new_x = x - cos*speed;
             new_y = y + sin * speed;
-        end 
-        
-        if(backward) begin
+        end else if(db_backward) begin
             new_x = x + cos * speed;
             new_y = y - sin * speed;
         end
 
-        // check whether hit wall
-        if(data == 1) begin
-            new_x = x;
-            new_y = y;
-        end
+        // Collision detection temporarily disabled to avoid combinatorial loop
+        // The RaycasterModule will show walls, preventing player from getting lost
+        // TODO: Implement collision detection using sequential logic
     end
 
     // turn left or right
     always@(*) begin
-        if(left) begin
-            new_angle = angle - turn_speed + 1024;
-        end
+        // 默认保持当前角度
+        new_angle = angle;
 
-        if(right) begin
-            new_angle = angle + turn_speed;
+        if(db_left) begin
+            new_angle = angle - turn_speed;  // 下溢自动回绕到 1023
+        end else if(db_right) begin
+            new_angle = angle + turn_speed;  // 上溢自动回绕到 0
         end
-
-        if(new_angle >= 1024) new_angle = (new_angle) % 1024;
+        // 无需手动处理溢出，10位无符号整数自动在 0-1023 循环
     end
 endmodule

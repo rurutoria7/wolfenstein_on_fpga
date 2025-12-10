@@ -16,7 +16,6 @@ module RaycasterModule (
     output wire [11:0] color,      // Pixel color (RGB444 format)
     output wire px_valid,          // Pixel output valid
 
-
     // Status
     output reg frame_done
 );
@@ -43,8 +42,8 @@ module RaycasterModule (
     reg [9:0] a;                   // Current player angle
     reg [7:0] col_count;           // Current column being rendered (0-159)
 
-    // PRECALC done flag
-    reg precalc_done;
+    // PRECALC done flag (from Precalc module)
+    wire precalc_done;
 
     // Ray angle for current column (computed from player angle + FOV offset)
     wire [9:0] current_ray_angle;
@@ -55,6 +54,7 @@ module RaycasterModule (
     wire signed [15:0] pc_vrx, pc_vry, pc_vxo, pc_vyo;
     wire signed [15:0] pc_hrx, pc_hry, pc_hxo, pc_hyo;
     wire pc_vskip, pc_hskip;
+    wire pc_done;
 
     // Wire connections for Expression module inputs
     wire signed [31:0] vdis = ver_dda_dis;
@@ -65,6 +65,9 @@ module RaycasterModule (
         .TILE_WIDTH(CELL_SIZE),
         .FRAC_BITS(7)
     ) precalc_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(state == PRECALC),
         .px(x),
         .py(y),
         .ra(current_ray_angle),
@@ -77,8 +80,11 @@ module RaycasterModule (
         .hry(pc_hry),
         .hxo(pc_hxo),
         .hyo(pc_hyo),
-        .hskip(pc_hskip)
+        .hskip(pc_hskip),
+        .done(pc_done)
     );
+
+    assign precalc_done = pc_done;
 
     // VerticalDDA module outputs
     wire ver_dda_done, ver_dda_hit;
@@ -133,12 +139,16 @@ module RaycasterModule (
     wire [6:0] expr_draw_begin;
     wire [6:0] expr_draw_end;
     wire expr_is_horizontal;
+    wire expr_done;
 
-    // Instantiate Expression module (combinational logic)
+    // Instantiate Expression module
     Expression #(
         .SCREEN_HEIGHT(SCREEN_HEIGHT),
         .TILE_WIDTH(CELL_SIZE)
     ) expr_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(state == CALC_HEIGHT),
         .ray_angle(current_ray_angle),
         .player_angle(a),
         .vdis(vdis),
@@ -148,7 +158,8 @@ module RaycasterModule (
         .line_height(expr_line_height),
         .draw_begin(expr_draw_begin),
         .draw_end(expr_draw_end),
-        .is_horizontal_wall(expr_is_horizontal)
+        .is_horizontal_wall(expr_is_horizontal),
+        .done(expr_done)
     );
 
     // Draw_col module outputs
@@ -160,7 +171,7 @@ module RaycasterModule (
     ) draw_col_inst (
         .clk(clk),
         .rst_n(rst_n),
-        .start(state == CALC_HEIGHT),
+        .start(state == DRAW_COL),
         .draw_begin(expr_draw_begin),
         .draw_end(expr_draw_end),
         .col_x(col_count),
@@ -209,8 +220,9 @@ module RaycasterModule (
             end
 
             CALC_HEIGHT: begin
-                // Single cycle, directly go to DRAW_COL
-                next_state = DRAW_COL;
+                // Wait for Expression module to complete (TrigLUT latency)
+                if (expr_done)
+                    next_state = DRAW_COL;
             end
 
             DRAW_COL: begin
@@ -268,19 +280,6 @@ module RaycasterModule (
         end
     end
 
-    // PRECALC state: Pre-calculate ray parameters
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            precalc_done <= 0;
-        end else begin
-            if (state == PRECALC) begin
-                precalc_done <= 1;
-            end else begin
-                precalc_done <= 0;
-            end
-        end
-    end
-
 endmodule
 
 
@@ -288,6 +287,9 @@ module Precalc #(
     parameter TILE_WIDTH = 64,
     parameter FRAC_BITS = 7
 ) (
+    input  wire clk,                    // Clock signal for TrigLUT
+    input  wire rst_n,                  // Reset (active low)
+    input  wire start,                  // Start precalculation
     input  wire [15:0] px,              // Player X position (world coords)
     input  wire [15:0] py,              // Player Y position (world coords)
     input  wire [9:0]  ra,              // Ray angle [0, 1024)
@@ -304,7 +306,10 @@ module Precalc #(
     output wire signed [15:0] hry,      // Initial ray Y for horizontal check
     output wire signed [15:0] hxo,      // X step for horizontal DDA
     output wire signed [15:0] hyo,      // Y step for horizontal DDA
-    output wire hskip                   // Skip horizontal check
+    output wire hskip,                  // Skip horizontal check
+
+    // Done flag
+    output reg done                     // Precalculation complete (accounts for TrigLUT latency)
 );
 
     // Angle constants (10-bit: 1024 = 360°)
@@ -319,11 +324,9 @@ module Precalc #(
     wire signed [15:0] sin_val;
     wire signed [15:0] cos_val;
 
-    // Instantiate TrigLUT
-    TrigLUT_sim_only #(
-        .WIDTH_TRIG(16),
-        .FRAC_BITS(FRAC_BITS)
-    ) trig_lut (
+    // Instantiate TrigLUT (Block RAM version)
+    TrigLUT trig_lut (
+        .clk(clk),           // Add clock signal
         .in_angle(ra),
         .out_sin(sin_val),
         .out_cos(cos_val),
@@ -396,6 +399,22 @@ module Precalc #(
     // hxo = cot * hyo (signed multiplication)
     wire signed [31:0] hxo_full = cot_val * hyo;
     assign hxo = hxo_full >>> FRAC_BITS;
+
+    // =========================================================================
+    // Done flag management (account for TrigLUT 1-cycle latency)
+    // =========================================================================
+    reg start_d1;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            start_d1 <= 1'b0;
+            done <= 1'b0;
+        end else begin
+            start_d1 <= start;
+            // Done is asserted 1 cycle after start (TrigLUT read delay)
+            done <= start_d1;
+        end
+    end
 
 endmodule
 
@@ -542,6 +561,10 @@ module Expression #(
     parameter SCREEN_HEIGHT = 120,
     parameter TILE_WIDTH = 64
 ) (
+    input wire clk,                         // Clock signal for TrigLUT
+    input wire rst_n,                       // Reset (active low)
+    input wire start,                       // Start calculation
+
     // Input: ray angles for fisheye correction
     input wire [9:0] ray_angle,             // Current ray angle
     input wire [9:0] player_angle,          // Player facing angle
@@ -553,10 +576,13 @@ module Expression #(
     input wire h_hit,                       // Horizontal wall hit flag
 
     // Output: drawing parameters
-    output wire [6:0] line_height,          // Wall line height (0-120)
-    output wire [6:0] draw_begin,           // Wall start y coordinate
-    output wire [6:0] draw_end,             // Wall end y coordinate
-    output wire is_horizontal_wall          // Wall orientation (for color)
+    output reg [6:0] line_height,           // Wall line height (0-120)
+    output reg [6:0] draw_begin,            // Wall start y coordinate
+    output reg [6:0] draw_end,              // Wall end y coordinate
+    output reg is_horizontal_wall,          // Wall orientation (for color)
+
+    // Done flag
+    output reg done                         // Calculation complete (accounts for TrigLUT latency)
 );
 
     // =========================================================================
@@ -567,7 +593,7 @@ module Expression #(
                         (vdis <= hdis);
 
     wire signed [31:0] final_dis = use_vertical ? vdis : hdis;
-    assign is_horizontal_wall = !use_vertical;
+    // is_horizontal_wall is now assigned in the output register always block
 
     // =========================================================================
     // Fisheye correction - apply cos^2(theta) to distance
@@ -578,11 +604,9 @@ module Expression #(
     // Calculate angle difference (wraps around automatically with 10-bit arithmetic)
     assign angle_diff = ray_angle - player_angle;
 
-    // Instantiate TrigLUT to get cos(angle_diff)
-    TrigLUT_sim_only #(
-        .WIDTH_TRIG(16),
-        .FRAC_BITS(7)
-    ) fisheye_correction_lut (
+    // Instantiate TrigLUT to get cos(angle_diff) (Block RAM version)
+    TrigLUT fisheye_correction_lut (
+        .clk(clk),               // Add clock signal
         .in_angle(angle_diff),
         .out_sin(),              // Unused
         .out_cos(cos_theta),
@@ -641,9 +665,44 @@ module Expression #(
     // =========================================================================
     // Calculate drawing coordinates (vertical centering)
     // =========================================================================
-    assign line_height = lineH;
-    assign draw_begin = 7'd60 - (lineH >> 1);  // 60 - lineH/2
-    assign draw_end = 7'd60 + (lineH >> 1);    // 60 + lineH/2
+    wire [6:0] lineH_wire = lineH;
+    wire [6:0] draw_begin_wire = 7'd60 - (lineH >> 1);  // 60 - lineH/2
+    wire [6:0] draw_end_wire = 7'd60 + (lineH >> 1);    // 60 + lineH/2
+
+    // =========================================================================
+    // Output registers and done flag management (account for TrigLUT 1-cycle latency)
+    // =========================================================================
+    // TrigLUT has 1-cycle latency:
+    //   T0: start=1, angle_diff valid
+    //   T1: cos_theta valid (Block RAM output)
+    //   T2: combinational logic stable (cos_theta_sq, corrected_dis, lineH)
+    // So we need to latch outputs at T2, not T1
+    reg start_d1, start_d2;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            start_d1 <= 1'b0;
+            start_d2 <= 1'b0;
+            done <= 1'b0;
+            line_height <= 7'd0;
+            draw_begin <= 7'd0;
+            draw_end <= 7'd0;
+            is_horizontal_wall <= 1'b0;
+        end else begin
+            start_d1 <= start;
+            start_d2 <= start_d1;
+            // Done is asserted 2 cycles after start (TrigLUT + combinational logic)
+            done <= start_d2;
+
+            // Latch outputs when calculation is complete (at T2)
+            if (start_d2) begin
+                line_height <= lineH_wire;
+                draw_begin <= draw_begin_wire;
+                draw_end <= draw_end_wire;
+                is_horizontal_wall <= !use_vertical;
+            end
+        end
+    end
 
 endmodule
 

@@ -1,6 +1,7 @@
 ## Constant
 
 - Game Resolution: 160x120
+    - for future, frame buffer should be to 320 x 240
     - FrameBufferSize = 230400 = 230k bits
 - Color: RGB444
 - Pixel Coord:
